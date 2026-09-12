@@ -59,14 +59,25 @@ def find_launch_points(ct: sitk.Image, aorta_mask: sitk.Image,
         if len(coords) < min_cluster_voxels:
             continue
         centroid = coords.mean(axis=0)
-        z, y, x = np.round(centroid).astype(int)
+        # Nearest voxel actually in the cluster, used as voxel_idx -- the
+        # rounded centroid itself can fall outside the (possibly curved)
+        # cluster, landing on a voxel with no reliable normal.
+        nearest = coords[np.argmin(np.linalg.norm(coords - centroid, axis=1))]
+        z, y, x = (int(v) for v in nearest)
         physical = np.array(ct.TransformContinuousIndexToPhysicalPoint(
             (centroid[2], centroid[1], centroid[0])            # (x, y, z) order!!!
         ))
+        # Average the normal over the cluster's own voxels -- every one of
+        # them already passed the near-zero-norm check above, so this is
+        # always well-defined (unlike sampling a single, possibly
+        # off-cluster, voxel).
+        cluster_normals = normals[coords[:, 0], coords[:, 1], coords[:, 2]]
+        avg_normal = cluster_normals.mean(axis=0)
+        avg_normal /= (np.linalg.norm(avg_normal) + 1e-9)
         out.append(LaunchPoint(
             voxel_idx=(z, y, x),
             physical_xyz=physical,
-            outward_normal=normals[z, y, x],
+            outward_normal=avg_normal,
             support=len(coords),
         ))
     return out

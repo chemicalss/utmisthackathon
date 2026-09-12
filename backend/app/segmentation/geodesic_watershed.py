@@ -93,6 +93,23 @@ def _voxel_graph(cost, spacing_zyx):
     return csr_matrix((weights, (rows, cols)), shape=(cost.size, cost.size))
 
 
+def _track_vesselness(vesselness: np.ndarray, bbox, path_physical: np.ndarray, ct: sitk.Image) -> float:
+    """Mean Frangi vesselness sampled at each point of a physical-space
+    path, in the same local bbox-cropped voxel grid `vesselness` lives in."""
+    if len(path_physical) == 0:
+        return 0.0
+    shape = vesselness.shape
+    samples = []
+    for p in path_physical:
+        x, y, z = ct.TransformPhysicalPointToContinuousIndex(tuple(p))
+        lz = int(round(z)) - bbox[0].start
+        ly = int(round(y)) - bbox[1].start
+        lx = int(round(x)) - bbox[2].start
+        if 0 <= lz < shape[0] and 0 <= ly < shape[1] and 0 <= lx < shape[2]:
+            samples.append(vesselness[lz, ly, lx])
+    return float(np.mean(samples)) if samples else 0.0
+
+
 def geodesic_watershed(ct: sitk.Image, aorta_mask: sitk.Image,
                         tracks: list[OutwardTrack], band_mm: float = 12.0) -> list[BranchRegion]:
     """Geodesic Path Search + Geodesic Watershed. Stops at region masks
@@ -110,12 +127,23 @@ def geodesic_watershed(ct: sitk.Image, aorta_mask: sitk.Image,
     vesselness = compute_vesselness(ct, bbox)
     cost = 1.0 - 0.95 * vesselness
     cost[~band[bbox]] = np.inf
-    graph = _voxel_graph(cost, spacing_zyx)
 
-    seed_indices = [
-        np.ravel_multi_index(tuple(lp.voxel_idx[i] - bbox[i].start for i in range(3)), cost.shape)
+    # Every launch point sits on the aortic surface shell -- *inside* the
+    # mask -- so it's excluded from `band` by definition (band is strictly
+    # outside the mask). Without this, each seed starts at infinite cost
+    # and is isolated in the graph before Dijkstra ever runs. Stitch each
+    # seed's own node back in at zero cost so it can reach its band-side
+    # neighbours; this doesn't touch the band anywhere else.
+    local_seed_idx = [
+        tuple(lp.voxel_idx[i] - bbox[i].start for i in range(3))
         for lp in launch_points
     ]
+    for local_idx in local_seed_idx:
+        cost[local_idx] = 0.0
+
+    graph = _voxel_graph(cost, spacing_zyx)
+
+    seed_indices = [np.ravel_multi_index(local_idx, cost.shape) for local_idx in local_seed_idx]
     dist_matrix = dijkstra(graph, indices=seed_indices, directed=False)
     owner = np.argmin(dist_matrix, axis=0).reshape(cost.shape)
     reachable = np.isfinite(np.min(dist_matrix, axis=0)).reshape(cost.shape)
@@ -133,7 +161,12 @@ def geodesic_watershed(ct: sitk.Image, aorta_mask: sitk.Image,
         regions.append(BranchRegion(
             launch=track.launch, region=region, bbox=bbox,
             persisted_mm=persisted_mm, direction_ok=track.accepted,
-            mean_vesselness=float(vesselness[region].mean()),
+            # Sampled along the walked centreline, not averaged over the
+            # whole watershed territory: the territory is a Voronoi-style
+            # split of the full narrow band between seeds, so most of it
+            # is perivascular fat rather than vessel, and would drown out
+            # the signal this check is meant to cross-validate.
+            mean_vesselness=_track_vesselness(vesselness, bbox, track.path_physical, ct),
             region_connected=(n_components == 1),
             geodesic_cost=float(dist_matrix[i][region.ravel()].mean()),
         ))
