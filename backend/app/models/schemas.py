@@ -17,19 +17,14 @@ class OutwardTrack:
 
 @dataclass
 class BranchInstance:
+    """One daughter branch, in exactly the shape the submission format
+    requires (see output/formatter.py)."""
     instance_id: str
-    ostium_xyz_mm: np.ndarray
-    seed_xyz_mm: np.ndarray
+    parent_instance_id: str
+    ostium_xyz_mm: list[float]
+    seed_xyz_mm: list[float]
     radius_mm: float
-    direction_xyz: np.ndarray
-
-@dataclass
-class BranchCandidate:
-    branch: BranchInstance
-    persisted_mm: float        # how far the outward walk got before stopping
-    direction_ok: bool         # outward_search didn't reject it for a sharp turn / lost signal
-    mean_vesselness: float     # 0-1, averaged along the traced skeleton
-    skeleton_connected: bool   # single connected piece, no gaps
+    direction_xyz: list[float]
 
 @dataclass
 class BranchRegion:
@@ -40,14 +35,4 @@ class BranchRegion:
     direction_ok: bool
     mean_vesselness: float
     region_connected: bool
-
-@dataclass
-class BranchRegion:
-    launch: LaunchPoint
-    region: np.ndarray
-    bbox: tuple
-    persisted_mm: float
-    direction_ok: bool
-    mean_vesselness: float
-    region_connected: bool
-    geodesic_cost: float   # new -- mean Dijkstra distance from seed to its own region
+    geodesic_cost: float    # mean Dijkstra distance from seed to its own region

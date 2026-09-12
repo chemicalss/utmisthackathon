@@ -3,6 +3,8 @@ import SimpleITK as sitk
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra
 
+from utils.geometry import skeletonize_voxels
+
 
 def get_neighbors_26(voxel, shape):
     """Return 26-connected neighbors.
@@ -85,14 +87,10 @@ def build_branch_graph(branch_voxels):
     return graph, voxels, voxel_to_id
 
 
-def find_start_voxel(branch, ct):
+def find_start_voxel(branch_voxels, ostium_xyz_mm, ct):
     """Find the branch voxel closest to the candidate ostium."""
 
-    branch_voxels = branch["voxels"]
-
-    ostium_index = ct.TransformPhysicalPointToIndex(
-        branch["ostium_xyz_mm"]
-    )
+    ostium_index = ct.TransformPhysicalPointToIndex(ostium_xyz_mm)
 
     start_voxel = min(
         branch_voxels,
@@ -108,22 +106,28 @@ def trace_proximal(branch, ct):
     """
     Trace the validated branch from the ostium outward.
 
-    Returns the branch with an ordered centerline.
+    Returns the branch with an ordered centerline. Tracing runs over a
+    1-voxel-wide skeleton of the branch's (otherwise blobby) watershed
+    region, not the region itself -- the skeleton is what the next
+    stage's bifurcation check also needs, and it keeps this stage's own
+    farthest-point search from wandering sideways through the region's
+    full width.
     """
 
-    branch_voxels = branch["voxels"]
+    skeleton_voxels = skeletonize_voxels(branch["voxels"])
 
-    if len(branch_voxels) < 2:
+    if len(skeleton_voxels) < 2:
         return {
             **branch,
-            "centerline": branch_voxels
+            "skeleton_voxels": skeleton_voxels,
+            "centerline": skeleton_voxels,
         }
 
     graph, voxels, voxel_to_id = build_branch_graph(
-        branch_voxels
+        skeleton_voxels
     )
 
-    start_voxel = find_start_voxel(branch, ct)
+    start_voxel = find_start_voxel(skeleton_voxels, branch["ostium_xyz_mm"], ct)
     start_id = voxel_to_id[start_voxel]
 
     distances, predecessors = dijkstra(
@@ -137,6 +141,7 @@ def trace_proximal(branch, ct):
     if len(reachable) == 0:
         return {
             **branch,
+            "skeleton_voxels": skeleton_voxels,
             "centerline": []
         }
 
@@ -167,6 +172,7 @@ def trace_proximal(branch, ct):
 
     return {
         **branch,
+        "skeleton_voxels": skeleton_voxels,
         "centerline": path
     }
 

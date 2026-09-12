@@ -30,7 +30,36 @@ def get_neighbors_26(voxel, shape):
     return neighbors
 
 
-def find_first_bifurcation(centerline, branch_voxels):
+def _spur_length(start, exclude, branch_set, shape, max_voxels):
+    """How many steps a branch starting at `start` keeps going (without
+    re-entering `exclude`) before it dead-ends, capped at `max_voxels`.
+
+    Skeletonization routinely leaves tiny one- or two-voxel spurs that
+    aren't real anatomy; without this check, every spur would register
+    as a second "forward continuation" and the very first one along the
+    centreline would always be (mis)read as a bifurcation.
+    """
+
+    visited = {exclude, start}
+    frontier = [start]
+    depth = 1
+
+    while frontier and depth < max_voxels:
+        next_frontier = []
+        for node in frontier:
+            for neighbor in get_neighbors_26(node, shape):
+                if neighbor in branch_set and neighbor not in visited:
+                    visited.add(neighbor)
+                    next_frontier.append(neighbor)
+        if not next_frontier:
+            break
+        frontier = next_frontier
+        depth += 1
+
+    return depth
+
+
+def find_first_bifurcation(centerline, branch_voxels, min_spur_voxels=3):
     """
     Find the first point where the vessel region
     has multiple forward directions.
@@ -79,35 +108,70 @@ def find_first_bifurcation(centerline, branch_voxels):
             if np.dot(direction, movement) > 0:
                 forward_neighbors.append(neighbor)
 
+        # Ignore forward continuations that immediately dead-end --
+        # those are skeletonization spurs, not real branches.
+        real_forward = [
+            n for n in forward_neighbors
+            if _spur_length(n, tuple(current), branch_set, shape, min_spur_voxels) >= min_spur_voxels
+        ]
+
         # More than one forward continuation
         # suggests a bifurcation.
-        if len(forward_neighbors) >= 2:
+        if len(real_forward) >= 2:
             return tuple(current)
 
     return None
 
 
-def stop_at_bifurcation(branch, ct):
+def _truncate_to_arclength(centerline, ct, max_mm):
+    """Trim a voxel-index centerline to at most `max_mm` of physical arc
+    length measured from its first point."""
+
+    if len(centerline) < 2:
+        return centerline
+
+    physical = [
+        np.array(ct.TransformIndexToPhysicalPoint(tuple(map(int, v))))
+        for v in centerline
+    ]
+
+    cum = 0.0
+    for i in range(1, len(physical)):
+        cum += np.linalg.norm(physical[i] - physical[i - 1])
+        if cum >= max_mm:
+            return centerline[:i + 1]
+
+    return centerline
+
+
+def stop_at_bifurcation(branch, ct, max_mm=10.0):
     """
-    Stop the traced branch at its first bifurcation.
+    Stop the traced branch at its first bifurcation, or after `max_mm`
+    of proximal path if no bifurcation occurs first -- matching the
+    challenge brief's "up to 10 mm beyond the ostium or until the first
+    downstream bifurcation, whichever occurs first".
     """
 
     centerline = branch["centerline"]
-    branch_voxels = branch["voxels"]
+    # Bifurcation detection needs the thin skeleton, not the full blobby
+    # watershed region -- see utils.geometry.skeletonize_voxels. Falls
+    # back to "voxels" for callers (e.g. this module's own __main__ demo)
+    # that hand in an already-thin, hand-built voxel set directly.
+    branch_voxels = branch.get("skeleton_voxels", branch["voxels"])
 
     bifurcation = find_first_bifurcation(
         centerline,
         branch_voxels
     )
 
-    # No bifurcation found
+    # No bifurcation found -- cap at max_mm of proximal path instead.
     if bifurcation is None:
 
         return {
             **branch,
             "bifurcation_found": False,
             "bifurcation_xyz_mm": None,
-            "final_centerline": centerline
+            "final_centerline": _truncate_to_arclength(centerline, ct, max_mm)
         }
 
     # Find where the bifurcation occurs
@@ -122,10 +186,11 @@ def stop_at_bifurcation(branch, ct):
         )
     )
 
-    # Keep the centerline up to the bifurcation
-    final_centerline = centerline[
-        :bifurcation_index + 1
-    ]
+    # Keep the centerline up to the bifurcation, further capped at
+    # max_mm in case the bifurcation itself lies beyond it.
+    final_centerline = _truncate_to_arclength(
+        centerline[:bifurcation_index + 1], ct, max_mm
+    )
 
     return {
         **branch,
