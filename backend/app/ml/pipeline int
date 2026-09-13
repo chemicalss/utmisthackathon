@@ -1,0 +1,14 @@
+from detection.launch_points import find_launch_points
+from detection.outward_search import walk_outward
+from segmentation.geodesic_watershed import merge_nearby_launch_points, geodesic_watershed
+from validation.validator import validate_branches
+from ml.classifier import score_branches
+
+
+def detect_and_segment(ct, aorta_mask):
+    raw_launch_points = find_launch_points(ct, aorta_mask)
+    launch_points = merge_nearby_launch_points(raw_launch_points)
+    tracks = [walk_outward(ct, lp) for lp in launch_points]
+    regions = geodesic_watershed(ct, aorta_mask, tracks)
+    validated = validate_branches(regions)
+    return score_branches(validated)   # no-op passthrough until ML_FILTER_ENABLED is turned on
