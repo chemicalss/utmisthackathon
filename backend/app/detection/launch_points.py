@@ -34,7 +34,7 @@ def find_launch_points(ct: sitk.Image, aorta_mask: sitk.Image,
 
     # 4. probe a short distance outward from each surface voxel; keep it if it stays close to aortic-blood-pool intensity rather than dropping into fat/muscle
     shell_vox = max(1, int(round(shell_out_mm / spacing.mean())))
-    intensity_floor = 120   # HU tolerance below the aortic pool
+    intensity_floor = 148   # HU tolerance below the aortic pool
 
     hot = np.zeros_like(surface)
     for z, y, x in zip(*np.where(surface)):
