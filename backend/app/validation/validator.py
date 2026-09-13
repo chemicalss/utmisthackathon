@@ -6,7 +6,7 @@ from validation.continuity import check_continuity
 
 def validate_branches(regions: list[BranchRegion],
                        min_persisted_mm: float = 5.0,
-                       min_vesselness: float = 0.05) -> list[BranchRegion]:
+                       min_vesselness: float = 0.12) -> list[BranchRegion]:
     # min_vesselness is calibrated against compute_vesselness's own
     # percentile-normalised scale (see validation/vesselness.py), where
     # 1.0 means "as tubular as the most vessel-like voxel in the case's
@@ -21,6 +21,7 @@ def validate_branches(regions: list[BranchRegion],
             continue
         if not check_direction(region):
             continue
+            print(f"[debug] region mean_vesselness={region.mean_vesselness:.4f} (threshold={min_vesselness})", flush=True)
         if region.mean_vesselness < min_vesselness:
             continue
         if not check_continuity(region):
